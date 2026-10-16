@@ -87,12 +87,65 @@ class TestStatsCommand:
                 "unique_source_files": 2,
                 "source_files": ["/a/video1.mp4", "/b/video2.mp4"],
             }
-            inst.get_backend.return_value = "local"
+            # A legacy dashcam_chunks_local index has no embedding_backend
+            # metadata, so get_backend() reports "gemini" for it. The text
+            # output must follow detect_index(), like --json does.
+            inst.get_backend.return_value = "gemini"
             MockStore.return_value = inst
             result = runner.invoke(cli, ["stats"])
             assert result.exit_code == 0
             assert "10" in result.output
             assert "qwen2b" in result.output
+            assert "local" in result.output
+            assert "gemini" not in result.output
+
+    def test_stats_json_empty(self, runner):
+        import json
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=(None, None)):
+            inst = MagicMock()
+            inst.get_stats.return_value = {
+                "total_chunks": 0, "unique_source_files": 0, "source_files": [],
+            }
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["stats", "--json"])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data == {
+                "backend": None,
+                "model": None,
+                "total_chunks": 0,
+                "unique_source_files": 0,
+                "source_files": [],
+                "missing_files": [],
+            }
+
+    def test_stats_json_with_data(self, runner, tmp_path):
+        import json
+        file_a = tmp_path / "a.mp4"
+        file_b = tmp_path / "b.mp4"
+        file_gone = tmp_path / "gone.mp4"
+        file_a.write_text("a")
+        file_b.write_text("b")
+
+        with patch("sentrysearch.store.SentryStore") as MockStore, \
+             patch("sentrysearch.store.detect_index", return_value=("gemini", None)):
+            inst = MagicMock()
+            inst.get_stats.return_value = {
+                "total_chunks": 1234,
+                "unique_source_files": 3,
+                "source_files": [str(file_a), str(file_b), str(file_gone)],
+            }
+            MockStore.return_value = inst
+            result = runner.invoke(cli, ["stats", "--json"])
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["backend"] == "gemini"
+            assert data["model"] is None
+            assert data["total_chunks"] == 1234
+            assert data["unique_source_files"] == 3
+            assert data["source_files"] == [str(file_a), str(file_b), str(file_gone)]
+            assert data["missing_files"] == [str(file_gone)]
 
 
 class TestSearchCommand:
